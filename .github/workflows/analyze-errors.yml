@@ -54,8 +54,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          body="${{ steps.chatgpt.outputs.response }}"
-          echo "== Commentaire envoyé sur la PR =="
-          echo "$body"
-          gh api repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments \
-            -f body="$body"
+            gh api \
+            -H "Authorization: token $GH_TOKEN" \
+            repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments \
+            -f body="${{ steps.chatgpt.outputs.response }}"
