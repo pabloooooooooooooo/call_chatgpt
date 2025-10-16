@@ -1,0 +1,47 @@
+name: Analyze Errors with ChatGPT
+
+on:
+  workflow_call:
+    inputs:
+      logs:
+        required: true
+        type: string
+      pr_number:
+        required: true
+        type: string
+    secrets:
+      OPENAI_API_KEY:
+        required: true
+      GH_TOKEN:
+        required: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call ChatGPT API
+        id: chatgpt
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          response=$(curl https://api.openai.com/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -d '{
+              "model": "gpt-4o-mini",
+              "messages": [
+                {"role": "system", "content": "Tu es un assistant DevOps. Analyse les logs d’erreur et explique le problème."},
+                {"role": "user", "content": "${{ inputs.logs }}"}
+              ]
+            }' | jq -r '.choices[0].message.content')
+          echo "response<<EOF" >> $GITHUB_OUTPUT
+          echo "$response" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Comment on PR
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          gh api repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments \
+            -f body="${{ steps.chatgpt.outputs.response }}"
+
