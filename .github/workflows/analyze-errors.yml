@@ -15,6 +15,10 @@ on:
       GH_TOKEN:
         required: true
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   analyze:
     runs-on: ubuntu-latest
@@ -35,13 +39,14 @@ jobs:
               ]
             }' | jq -r '.choices[0].message.content')
           echo "response<<EOF" >> $GITHUB_OUTPUT
-          echo "$response" >> $GITHUB_OUTPUT
+          echo "${response:-Aucune réponse du modèle}" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Comment on PR
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          gh api repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments \
+          gh api \
+            -H "Authorization: token $GH_TOKEN" \
+            repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments \
             -f body="${{ steps.chatgpt.outputs.response }}"
-
