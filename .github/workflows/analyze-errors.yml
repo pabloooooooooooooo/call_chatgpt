@@ -1,7 +1,9 @@
-name: Analyze Errors with ChatGPT
+name: Analyse de logs réutilisable
 
+# Changement majeur ici : on utilise "workflow_call" au lieu de "workflow_dispatch"
 on:
   workflow_call:
+    # Les inputs sont maintenant définis ici
     inputs:
       logs:
         required: true
@@ -9,6 +11,15 @@ on:
       pr_number:
         required: true
         type: string
+      # Le numéro de la PR doit être associé à un dépôt, on le passe en input
+      repo_owner:
+        required: true
+        type: string
+      repo_name:
+        required: true
+        type: string
+        
+    # Les secrets que ce workflow attend de recevoir de l'appelant
     secrets:
       OPENAI_API_KEY:
         required: true
@@ -16,47 +27,53 @@ on:
         required: true
 
 jobs:
-  analyze:
+  analyze-and-comment:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    
     steps:
-      - name: Appel API ChatGPT
-        id: chatgpt
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      - name: Analyser les logs avec ChatGPT
+        id: chatgpt-analysis
         run: |
-          # Construire le payload proprement
-          payload=$(jq -n \
-            --arg logs "${{ inputs.logs }}" \
-            '{
-              model: "gpt-4o-mini",
-              messages: [
-                {role: "system", content: "Tu es un assistant DevOps. Analyse les logs d’erreur de CI et explique la cause du problème de manière concise."},
-                {role: "user", content: $logs}
-              ]
-            }')
-
-          echo "== Envoi à OpenAI =="
-          echo "$payload" | jq .
-
-          # Appel de l’API OpenAI
-          response=$(curl -s https://api.openai.com/v1/chat/completions \
+          # On utilise le secret passé par l'appelant
+          response=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -d "$payload" | jq -r '.choices[0].message.content // empty')
-
-          # Sauvegarde de la réponse pour l’étape suivante
-          echo "response<<EOF" >> $GITHUB_OUTPUT
-          echo "${response:-Aucune réponse du modèle.}" >> $GITHUB_OUTPUT
+            -H "Authorization: Bearer ${{ secrets.OPENAI_API_KEY }}" \
+            -d '{
+              "model": "gpt-3.5-turbo",
+              "messages": [
+                {
+                  "role": "system",
+                  "content": "Tu es un assistant expert en analyse de logs d''erreurs. Analyse les logs suivants et fournis un résumé concis des erreurs potentielles et des suggestions de correction. Formatte ta réponse en Markdown."
+                },
+                {
+                  "role": "user",
+                  "content": "${{ inputs.logs }}" # On utilise "inputs" au lieu de "github.event.inputs"
+                }
+              ],
+              "max_tokens": 512,
+              "temperature": 0.5
+            }')
+          
+          analysis_content=$(echo "$response" | jq -r '.choices[0].message.content')
+          echo "analysis<<EOF" >> $GITHUB_OUTPUT
+          echo "$analysis_content" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+        shell: bash
 
-      - name: Post comment on PR
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          # Formater le commentaire en Markdown
-          comment_body="### Analyse de l'erreur par l'assistant IA 🤖
+      - name: Commenter sur la Pull Request
+        uses: actions/github-script@v6
+        with:
+          # On utilise le secret passé par l'appelant
+          github-token: ${{ secrets.GH_TOKEN }}
+          script: |
+            const comment_body = `### Analyse des logs par ChatGPT 🤖\n\n${{ steps.chatgpt-analysis.outputs.analysis }}`;
 
-          ${{ steps.chatgpt.outputs.response }}"
-
-          gh pr comment ${{ inputs.pr_number }} --body "$comment_body"```
+            // On utilise les inputs pour spécifier le dépôt et le numéro de PR
+            await github.rest.issues.createComment({
+              owner: '${{ inputs.repo_owner }}',
+              repo: '${{ inputs.repo_name }}',
+              issue_number: ${{ inputs.pr_number }},
+              body: comment_body
+            });
