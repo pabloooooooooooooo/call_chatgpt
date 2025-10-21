@@ -49,12 +49,14 @@ jobs:
           echo "${response:-Aucune réponse du modèle.}" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Commenter sur la PR
-        if: ${{ steps.chatgpt.outputs.response != '' }}
+      - name: Post comment on PR
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
-            gh api \
-            -H "Authorization: token $GH_TOKEN" \
-            repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments \
-            -f body="${{ steps.chatgpt.outputs.response }}"
+          # Formater le commentaire en Markdown
+          comment_body="### Analyse de l'erreur par l'assistant IA 🤖
+
+          ${{ steps.chatgpt.outputs.response }}"
+
+          gh pr comment ${{ inputs.pr_number }} --body "$comment_body"```
