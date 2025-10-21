@@ -36,12 +36,19 @@ jobs:
       - name: Analyser les logs avec ChatGPT
         id: chatgpt-analysis
         run: |
-          # On utilise le secret passé par l'appelant
-          response=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${{ secrets.OPENAI_API_KEY }}" \
-            -d '{
-              "model": "gpt-3.5-turbo",
+          # set -e: Arrête le script si une commande échoue
+          # set -o pipefail: Assure que l'échec dans un pipe est détecté
+          set -eo pipefail
+
+          echo "--- Début de l'analyse des logs ---"
+
+          # Étape 1: Préparer le corps de la requête en JSON
+          # Cela évite les erreurs si les logs contiennent des caractères spéciaux comme des guillemets
+          json_payload=$(jq -n \
+            --arg model "gpt-3.5-turbo" \
+            --arg logs "${{ inputs.logs }}" \
+            '{
+              "model": $model,
               "messages": [
                 {
                   "role": "system",
@@ -49,28 +56,49 @@ jobs:
                 },
                 {
                   "role": "user",
-                  "content": "${{ inputs.logs }}" # On utilise "inputs" au lieu de "github.event.inputs"
+                  "content": $logs
                 }
               ],
               "max_tokens": 512,
               "temperature": 0.5
             }')
-          
+
+          # Étape 2: Appeler l'API OpenAI avec le JSON préparé
+          # L'option -f (fail) fait échouer curl si le code de statut HTTP est une erreur (>=400)
+          response=$(curl -s -f -X POST https://api.openai.com/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.OPENAI_API_KEY }}" \
+            -d "$json_payload")
+
+          # Étape 3: Journaliser la réponse BRUTE de l'API pour le débogage
+          # C'est l'étape la plus importante pour comprendre le problème !
+          echo "--- Réponse de l'API OpenAI ---"
+          echo "$response"
+          echo "-----------------------------"
+
+          # Étape 4: Extraire le contenu. jq échouera si le chemin n'existe pas, arrêtant le script grâce à "set -e"
           analysis_content=$(echo "$response" | jq -r '.choices[0].message.content')
+          
+          # Si le contenu est vide ou null, on force une erreur pour être explicite
+          if [ -z "$analysis_content" ] || [ "$analysis_content" == "null" ]; then
+            echo "Erreur: Le contenu extrait de la réponse de l'API est vide ou null."
+            exit 1
+          fi
+
+          # Étape 5: Transmettre le résultat à l'étape suivante
           echo "analysis<<EOF" >> $GITHUB_OUTPUT
           echo "$analysis_content" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Commenter sur la Pull Request
+        # Cette étape ne s'exécutera que si la précédente a réussi
         uses: actions/github-script@v6
         with:
-          # On utilise le secret passé par l'appelant
           github-token: ${{ secrets.GH_TOKEN }}
           script: |
             const comment_body = `### Analyse des logs par ChatGPT 🤖\n\n${{ steps.chatgpt-analysis.outputs.analysis }}`;
 
-            // On utilise les inputs pour spécifier le dépôt et le numéro de PR
             await github.rest.issues.createComment({
               owner: '${{ inputs.repo_owner }}',
               repo: '${{ inputs.repo_name }}',
